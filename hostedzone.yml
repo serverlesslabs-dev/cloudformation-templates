@@ -1,0 +1,37 @@
+---
+Description: >
+  Create a public hosted zone in Route53
+
+# Grab some parameters
+Parameters:
+  DomainName:
+    Type: String
+    Description: "The base domain name for the web site (no 'www')"
+    MinLength: 4
+    MaxLength: 253
+    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
+    ConstraintDescription: "Provide a valid domain name using only lowercase letters, numbers, and dash (-)"
+
+# And now some resources - we'll probably end up splitting the HostedZone into a separate template
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub 
+          - "Public zone for ${Domain}"
+          - { Domain: !Ref DomainName }
+      HostedZoneTags:
+        -
+          Key: Domain
+          Value: !Ref DomainName
+
+Outputs:
+  NameServers:
+    Description: "Name servers for the hosted zone"
+    Value: !Join
+      - ','
+      - !GetAtt HostedZone.NameServers
+
+

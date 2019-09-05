@@ -1,0 +1,119 @@
+---
+Description: >
+  Create an S3 static website, front with a cloudfront distribution pointing at a domain name. 
+  Add details to Route53 HostedZone
+
+# Grab some parameters
+Parameters:
+  DomainName:
+    Type: String
+    Description: "The base domain name for the web site (no 'www')"
+    MinLength: 4
+    MaxLength: 253
+    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
+    ConstraintDescription: "Provide a valid domain name using only lowercase letters, numbers, and dash (-)"
+
+  CertificateARN:
+    Type: String
+    Description: the Amazon Resource Name (ARN) of an existing AWS Certificate Manager (ACM) certificate.
+    AllowedPattern: "arn:aws:acm:.*"
+
+# And now some resources - we'll probably end up splitting the HostedZone into a separate template
+Resources:
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+    DeletionPolicy: Retain
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket
+                - /*
+      Bucket: !Ref S3Bucket
+    DependsOn: S3Bucket
+
+  S3LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join [ '', [ !Ref DomainName, '-logs' ]]
+    DeletionPolicy: Retain
+
+  # CDN to front the S3 bucket - serve over https
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    DependsOn: LogsBucket
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases:
+          - !Ref S3Bucket
+        Origins:
+          -
+            DomainName: !Select [2, !Split ['/', !GetAtt 'S3Bucket.WebsiteURL']]
+            Id: RedirectS3Origin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: RedirectS3Origin
+          AllowedMethods:
+            - GET
+            - HEAD
+          DefaultTTL: 30
+          MinTTL: 5
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+             Forward: none
+          ViewerProtocolPolicy: allow-all
+        Logging:
+          Bucket: !Join ['', [ !Ref S3LogBucket, '.s3.amazonaws.com' ]]
+          IncludeCookies: false
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateARN
+          SslSupportMethod: sni-only
+    DependsOn: S3Bucket
+
+  myDNS:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join [ '', [ !Ref DomainName, '.' ]]
+      Comment: Zone apex alias targetting Cloudfront distribution.
+      RecordSets:
+      - Name: !Ref DomainName
+        Type: A
+        AliasTarget:
+          HostedZoneId: Z2FDTNDATAQYW2
+          DNSName: !GetAtt CloudFrontDistribution.DomainName
+    DependsOn: CloudFrontDistribution
+
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt S3Bucket.WebsiteURL
+    Description: URL for website hosted on S3
+  S3BucketSecureURL:
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !GetAtt S3Bucket.DomainName
+    Description: Name of S3 bucket to hold website content
+
