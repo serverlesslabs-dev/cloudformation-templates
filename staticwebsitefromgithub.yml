@@ -5,17 +5,9 @@ Description: >
 
 # Grab some parameters
 Parameters:
-  domainRoot:
+  DomainName:
     Type: String
     Description: "The base domain name for the web site (no 'www')"
-    MinLength: 4
-    MaxLength: 253
-    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
-    ConstraintDescription: "Provide a valid domain name using only lowercase letters, numbers, and dash (-)"
-
-  domainUrl:
-    Type: String
-    Description: "The website domain name (if different to the Domain root"
     MinLength: 4
     MaxLength: 253
     AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
@@ -26,10 +18,14 @@ Parameters:
     Description: the Amazon Resource Name (ARN) of an existing AWS Certificate Manager (ACM) certificate.
     AllowedPattern: "arn:aws:acm:.*"
 
+  NotificationEmails:
+    Type: String
+    Description: Email address to recieve build Notifications
+    AllowedPattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
 
-# We need a condition to decide if we're a top level domain name or if we're a subdomain
-Conditions:
-  subdomain: !Not [!Equals [ !Ref domainUrl, "" ]]
+  GithubTokenParameter:
+    Type: String
+    Description: Name of SSM Parameter holding github token for repo
 
 # And now some resources - we'll probably end up splitting the HostedZone into a separate template
 Resources:
@@ -37,7 +33,8 @@ Resources:
   S3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !If [subdomain, !Ref domainUrl, !Ref domainRoot]
+      BucketName: !Ref DomainName
+      AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: error.html
@@ -65,7 +62,7 @@ Resources:
   S3LogBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Join [ '', [ !If [subdomain, !Ref domainUrl, !Ref domainRoot], '-logs' ]]
+      BucketName: !Join [ '', [ !Ref DomainName, '-logs' ]]
     DeletionPolicy: Retain
 
   # CDN to front the S3 bucket - serve over https
@@ -108,15 +105,31 @@ Resources:
   myDNS:
     Type: AWS::Route53::RecordSetGroup
     Properties:
-      HostedZoneName: !Join [ '', [ !Ref domainRoot, '.' ]]
+      HostedZoneName: !Join [ '', [ !Ref DomainName, '.' ]]
       Comment: Zone apex alias targetting Cloudfront distribution.
       RecordSets:
-      - Name: !If [subdomain, !Ref domainUrl, !Ref domainRoot]
+      - Name: !Ref DomainName
         Type: A
         AliasTarget:
           HostedZoneId: Z2FDTNDATAQYW2
           DNSName: !GetAtt CloudFrontDistribution.DomainName
     DependsOn: CloudFrontDistribution
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: Email
+          Endpoint: !Ref NotificationEmails
+
+  GithubToken:
+    Type: AWS::CodeBuild::SourceCredential
+    Properties:
+      AuthType: PERSONAL_ACCESS_TOKEN
+      ServerType: GITHUB
+      Token: !Join [ ':', [ '{{resolve', 'secretsmanager', !Ref GithubTokenParameter, 'SecretString', !Ref GithubTokenParameter, '}}' ]]
+
+        # '{{resolve:secretsmanager:!Ref GithubTokenParameter:SecretString:!Ref GithubTokenParameter}}'
 
 Outputs:
   WebsiteURL:
@@ -128,4 +141,3 @@ Outputs:
       - - 'https://'
         - !GetAtt S3Bucket.DomainName
     Description: Name of S3 bucket to hold website content
-
