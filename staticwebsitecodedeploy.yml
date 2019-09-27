@@ -1,0 +1,184 @@
+---
+Description: >
+  Create a codebuild project to deploy and cloudwatch event to rebuild/deploy on commits
+
+Parameters:
+  # External stacks
+  WebsiteStack:
+    Type: String
+    Description: Name of existing stack that deployed static S3 website
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9-]+$"
+  
+  RepoStack:
+    Type: String
+    Description: Name of codecommit stack to import values from
+    MaxLength: 128
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9-]+$"
+ 
+  NotificationEmails:
+    Type: String
+    Description: Email address to recieve build Notifications
+    AllowedPattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+
+  CodeBuildImage:
+    Type: String
+    Description: Image to use for the codebuild Project
+    Default: aws/codebuild/amazonlinux2-x86_64-standard:1.0
+
+  CodeBuildBranchName:
+    Type: String
+    Description: Branch for codecommit repo which contains the source for this build
+    Default: master
+
+  CodeBuildProjectName:
+    Type: String
+    Description: Name to use for the CodeBuild Project
+    # AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9\-_
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: 
+          default: External Stacks
+        Parameters:
+          - WebsiteStack
+          - RepoStack
+      - Label:
+          default: CodeBuild Project Configuration
+        Parameters:
+          - CodeBuildProjectName
+          - CodeBuildBranchName
+          - CodeBuildImage
+          - NotificationEmails
+
+# And now some resources
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: Email
+          Endpoint: !Ref NotificationEmails
+
+  CodeBuildIamPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: !Join [ ' ', [ "Policy to allow codebuild project", !Ref CodeBuildProjectName]]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource: "*"
+            Action: 
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+          - Effect: Allow
+            Resource:
+              - Fn::ImportValue: !Sub "${WebsiteStack}:S3BucketArn"
+              - !Join 
+                - '/'
+                -
+                  - Fn::ImportValue: !Sub "${WebsiteStack}:S3BucketArn" 
+                  - '*'
+            Action:
+              - s3:PutObject
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+          - Effect: Allow
+            Resource:
+              - Fn::ImportValue: !Sub "${RepoStack}:RepoArn"
+            Action:
+              - codecommit:GitPull
+
+  CodeBuildIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref CodeBuildIamPolicy
+    DependsOn: CodeBuildIamPolicy
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref CodeBuildProjectName
+      BadgeEnabled: true
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref CodeBuildImage
+        Type: LINUX_CONTAINER
+      Source:
+        Type: CODECOMMIT
+        Location: 
+          Fn::ImportValue: !Sub "${RepoStack}:RepoUrl"
+      SourceVersion: !Join ['', ['refs/heads/', !Ref CodeBuildBranchName]]
+      ServiceRole: !Ref CodeBuildIAMRole
+      Artifacts:
+        Type: S3
+        Location: 
+          Fn::ImportValue: !Sub "${WebsiteStack}:S3BucketArn"
+        Name: '/'
+        EncryptionDisabled: true
+    DependsOn: CodeBuildIAMRole
+
+  CloudwatchEventsCodebuildIamPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: !Join [ ' ', [ "Policy to allow cloudwatch events to build codebuild project", !Ref CodeBuildProjectName]]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Resource: !GetAtt CodeBuildProject.Arn
+            Action: 
+              - codebuild:StartBuild
+    DependsOn: CodeBuildProject
+
+  CloudwatchEventsCodebuildIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref CodeBuildIamPolicy
+    DependsOn: CloudwatchEventsCodebuildIamPolicy
+
+  CloudWatchEventsTarget:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join [ ' ', [ 'Call', !Ref CodeBuildProjectName, 'when change to', !Ref CodeBuildBranchName, 'branch of repo' ]]
+      RoleArn: !GetAtt CloudwatchEventsCodebuildIAMRole.Arn
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        detail:
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref CodeBuildBranchName
+        resources:
+          - !GetAtt CodeBuildProject.Arn
+      Targets:
+        - Arn: !GetAtt CodeBuildProject.Arn
+          Id: CodeBuild123
+          RoleArn: !GetAtt CloudwatchEventsCodebuildIAMRole.Arn
+    DependsOn: CloudwatchEventsCodebuildIAMRole

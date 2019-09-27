@@ -16,10 +16,6 @@ Parameters:
   domainUrl:
     Type: String
     Description: "The website domain name (if different to the Domain root"
-    MinLength: 4
-    MaxLength: 253
-    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
-    ConstraintDescription: "Provide a valid domain name using only lowercase letters, numbers, and dash (-)"
 
   CertificateARN:
     Type: String
@@ -119,13 +115,22 @@ Resources:
     DependsOn: CloudFrontDistribution
 
 Outputs:
-  WebsiteURL:
+  S3BucketArn:
+    Value: !GetAtt S3Bucket.Arn
+    Description: Arn for Static website S3 Bucket
+    Export: 
+      Name: !Join [':', [ !Ref 'AWS::StackName', S3BucketArn]]
+  S3WebsiteURL:
     Value: !GetAtt S3Bucket.WebsiteURL
     Description: URL for website hosted on S3
+    Export: 
+      Name: !Join [':', [ !Ref 'AWS::StackName', S3WebsiteUrl]]
   S3BucketSecureURL:
     Value: !Join 
       - ''
       - - 'https://'
         - !GetAtt S3Bucket.DomainName
     Description: Name of S3 bucket to hold website content
+    Export: 
+      Name: !Join [':', [ !Ref 'AWS::StackName', S3BucketSecureURL]]
 

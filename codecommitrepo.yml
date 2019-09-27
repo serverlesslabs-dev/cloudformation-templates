@@ -1,0 +1,30 @@
+---
+Description: >
+  Create a codecommit repository
+
+# Grab some parameters
+Parameters:
+  RepoName:
+    Type: String
+    Description: Name to use for a codecommit repo to hold code for website
+
+# And now some resources - we'll probably end up splitting the HostedZone into a separate template
+Resources:
+
+  CodeRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryName: !Ref RepoName
+
+Outputs:
+  RepoArn:
+    Value: !GetAtt CodeRepo.Arn
+    Description: 'Repo Arn'
+    Export: 
+      Name: !Join [':', [ !Ref 'AWS::StackName', RepoArn]]
+
+  RepoUrl:
+    Value: !GetAtt CodeRepo.CloneUrlHttp
+    Description: 'Repo URL'
+    Export: 
+      Name: !Join [':', [ !Ref 'AWS::StackName', RepoUrl]]
