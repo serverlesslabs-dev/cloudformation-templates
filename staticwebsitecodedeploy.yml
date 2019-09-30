@@ -34,7 +34,11 @@ Parameters:
   CodeBuildProjectName:
     Type: String
     Description: Name to use for the CodeBuild Project
-    # AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9\-_
+
+  BuildSpec:
+    Type: String
+    Description: File containing buildspec for project - typically buildspec.yml
+    Default: buildspec.yml
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -50,6 +54,7 @@ Metadata:
           - CodeBuildProjectName
           - CodeBuildBranchName
           - CodeBuildImage
+          - BuildSpec
           - NotificationEmails
 
 # And now some resources
@@ -91,6 +96,18 @@ Resources:
               - Fn::ImportValue: !Sub "${RepoStack}:RepoArn"
             Action:
               - codecommit:GitPull
+          - Effect: Allow
+            Resource:
+              - !Join ['', [ 'arn:aws:codebuild:', !Ref "AWS::Region", ':', !Ref "AWS::AccountId", ":project/", !Ref CodeBuildProjectName ]]
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetProjects
+          - Effect: Allow
+            Resource: 
+              - !Ref SNSTopic
+            Action:
+              - SNS:Publish
+    DependsOn: SNSTopic
 
   CodeBuildIAMRole:
     Type: AWS::IAM::Role
@@ -102,6 +119,7 @@ Resources:
             Principal:
               Service:
                 - codebuild.amazonaws.com
+                - events.amazonaws.com
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
@@ -118,6 +136,7 @@ Resources:
         Image: !Ref CodeBuildImage
         Type: LINUX_CONTAINER
       Source:
+        BuildSpec: !Ref BuildSpec
         Type: CODECOMMIT
         Location: 
           Fn::ImportValue: !Sub "${RepoStack}:RepoUrl"
@@ -131,40 +150,11 @@ Resources:
         EncryptionDisabled: true
     DependsOn: CodeBuildIAMRole
 
-  CloudwatchEventsCodebuildIamPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: !Join [ ' ', [ "Policy to allow cloudwatch events to build codebuild project", !Ref CodeBuildProjectName]]
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Resource: !GetAtt CodeBuildProject.Arn
-            Action: 
-              - codebuild:StartBuild
-    DependsOn: CodeBuildProject
-
-  CloudwatchEventsCodebuildIAMRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - events.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - !Ref CodeBuildIamPolicy
-    DependsOn: CloudwatchEventsCodebuildIamPolicy
-
-  CloudWatchEventsTarget:
+  CodeCommitCloudWatchEvent:
     Type: AWS::Events::Rule
     Properties:
       Description: !Join [ ' ', [ 'Call', !Ref CodeBuildProjectName, 'when change to', !Ref CodeBuildBranchName, 'branch of repo' ]]
-      RoleArn: !GetAtt CloudwatchEventsCodebuildIAMRole.Arn
+      RoleArn: !GetAtt CodeBuildIAMRole.Arn
       EventPattern:
         source:
           - aws.codecommit
@@ -176,9 +166,36 @@ Resources:
           referenceName:
             - !Ref CodeBuildBranchName
         resources:
-          - !GetAtt CodeBuildProject.Arn
+          - Fn::ImportValue: !Sub "${RepoStack}:RepoArn"
       Targets:
         - Arn: !GetAtt CodeBuildProject.Arn
           Id: CodeBuild123
-          RoleArn: !GetAtt CloudwatchEventsCodebuildIAMRole.Arn
-    DependsOn: CloudwatchEventsCodebuildIAMRole
+          RoleArn: !GetAtt CodeBuildIAMRole.Arn
+    DependsOn: 
+      - CodeBuildIAMRole
+      - CodeBuildProject
+
+  CodeBuildCloudWatchEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join [ ' ', [ 'Send SNS notification with status from Codebuild run of', !Ref CodeBuildProjectName ]]
+      RoleArn: !GetAtt CodeBuildIAMRole.Arn
+      EventPattern:
+        source:
+          - aws.codebuild
+        detail-type:
+          - CodeBuild Build State Change
+        detail:
+          build-status:
+            - FAILED
+            - SUCCEEDED
+        resources:
+          - !GetAtt CodeBuildProject.Arn
+      Targets:
+        - Arn: !Ref SNSTopic
+          Id: CodeBuildNotification
+          # RoleArn: !GetAtt CodeBuildIAMRole.Arn
+    DependsOn: 
+      - CodeBuildIAMRole
+      - CodeBuildProject
+      - SNSTopic
