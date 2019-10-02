@@ -185,8 +185,8 @@ Resources:
           build-status:
             - FAILED
             - SUCCEEDED
-        resources:
-          - !GetAtt CodeBuildProject.Arn
+          project-name:
+            - !Ref CodeBuildProjectName
       Targets:
         - Arn: !Ref SNSTopic
           Id: CodeBuildNotification
