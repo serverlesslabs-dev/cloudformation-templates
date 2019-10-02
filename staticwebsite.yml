@@ -56,7 +56,6 @@ Resources:
                 - !Ref S3Bucket
                 - /*
       Bucket: !Ref S3Bucket
-    DependsOn: S3Bucket
 
   S3LogBucket:
     Type: AWS::S3::Bucket
@@ -67,7 +66,6 @@ Resources:
   # CDN to front the S3 bucket - serve over https
   CloudFrontDistribution:
     Type: "AWS::CloudFront::Distribution"
-    DependsOn: LogsBucket
     Properties:
       DistributionConfig:
         Enabled: true
@@ -99,7 +97,6 @@ Resources:
         ViewerCertificate:
           AcmCertificateArn: !Ref CertificateARN
           SslSupportMethod: sni-only
-    DependsOn: S3Bucket
 
   myDNS:
     Type: AWS::Route53::RecordSetGroup
@@ -112,7 +109,6 @@ Resources:
         AliasTarget:
           HostedZoneId: Z2FDTNDATAQYW2
           DNSName: !GetAtt CloudFrontDistribution.DomainName
-    DependsOn: CloudFrontDistribution
 
 Outputs:
   S3BucketArn:
